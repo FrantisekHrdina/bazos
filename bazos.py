@@ -134,7 +134,6 @@ def load_ads(keyword, config):
     ads = []
     now = datetime.datetime.now()
     i = 0
-    global_search = True if config[keyword]['URL'] == 'https://www.bazos.cz/' else False
     while i < total:
         # searching through global page must be solved diferently
         if global_search:
@@ -146,15 +145,20 @@ def load_ads(keyword, config):
 
         tmp_ads = tmp_soup.find_all('div', class_='inzeraty')
         for ad in tmp_ads:
-            cena = ad.find('div', class_='inzeratycena').text.strip()
-            inzerat_url = config[keyword]['ADS_URL'] + ad.find('span', class_='nadpis').find('a')['href']
+            prize = ad.find('div', class_='inzeratycena').text.strip()
+
+            if global_search:
+                ad_url = ad.find('span', class_='nadpis').find('a')['href']
+            else:
+                ad_url = config[keyword]['ADS_URL'] + ad.find('span', class_='nadpis').find('a')['href']
+
             datum_text = ad.find('span', class_='velikost10').text
             text_re = re.compile(r".*(\[.*\]).*")
             text = text_re.search(datum_text).group(1).replace(' ', '').strip()
             date_time = datetime.datetime.strptime(text.replace('[', '').replace(']', ''), '%d.%m.%Y')
             if now - date_time >= datetime.timedelta(days=2):
                 break
-            ads.append((inzerat_url, cena, date_time))
+            ads.append((ad_url, prize, date_time))
 
         if now - date_time >= datetime.timedelta(days=10):
             break
@@ -173,7 +177,6 @@ if __name__ == '__main__':
 
     config = configparser.ConfigParser()
     config.read(args.config)
-    print(config['GENERAL']['LOG'])
     logging.basicConfig(filename=config['GENERAL']['LOG'], format='%(asctime)s %(message)s', level=logging.DEBUG)
     logging.info('Bazoš started')
 
@@ -191,3 +194,4 @@ if __name__ == '__main__':
     send_email(args.option, new_ads, config, logging)
 
     logging.info('Bazoš ended')
+
