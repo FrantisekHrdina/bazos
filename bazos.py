@@ -47,8 +47,8 @@ def find_new_ads(previous_ads_url, ads):
 def send_email(keyword, content, config, logging):
     if len(content) == 0:
         logging.info('No new ads found')
-        return 
-    
+        return
+
     logging.info('New ads found: {0}'.format(len(content)))
     # Replace end sequence chars in subject
     subject = 'Bazoš hlídač: {0}'.format(config[keyword]['TITLE'])
@@ -130,7 +130,6 @@ def load_ads(keyword, config):
     total_re = re.compile(r".*Zobrazeno.* inzerátů z (.*).*")
     total = int(total_re.search(soup.text).group(1).replace(' ', '').strip())
 
-
     ads = []
     now = datetime.datetime.now()
     i = 0
@@ -139,18 +138,21 @@ def load_ads(keyword, config):
         if global_search:
             tmp_res = requests.get(config[keyword]['URL'] + '/search.php' + params + '/&crz=' + str(i), verify=False)
         else:
-            tmp_res = requests.get(config[keyword]['URL'] + str(i) + '/' + params, verify=False)
+            if i == 0:
+                page = ''
+            else:
+                page = str(i) + '/'
 
+            tmp_res = requests.get(config[keyword]['URL'] + page + params, verify=False)
         tmp_soup = bs4.BeautifulSoup(tmp_res.content, 'html.parser')
 
         tmp_ads = tmp_soup.find_all('div', class_='inzeraty')
         for ad in tmp_ads:
             prize = ad.find('div', class_='inzeratycena').text.strip()
-
             if global_search:
-                ad_url = ad.find('span', class_='nadpis').find('a')['href']
+                ad_url = ad.find('h2', class_='nadpis').find('a')['href']
             else:
-                ad_url = config[keyword]['ADS_URL'] + ad.find('span', class_='nadpis').find('a')['href']
+                ad_url = config[keyword]['ADS_URL'] + ad.find('h2', class_='nadpis').find('a')['href']
 
             datum_text = ad.find('span', class_='velikost10').text
             text_re = re.compile(r".*(\[.*\]).*")
@@ -165,7 +167,6 @@ def load_ads(keyword, config):
 
         time.sleep(15)
         i += 20
-
     return ads
 
 
