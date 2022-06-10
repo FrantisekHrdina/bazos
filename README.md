@@ -16,3 +16,8 @@ Set up crontabs
 ## Technologies
 - Python
 - Beautiful Soup
+- Gmail api
+
+## Sending email using gmail api
+- author: Redouane Niboucha
+- https://www.thepythoncode.com/article/use-gmail-api-in-python

@@ -3,21 +3,28 @@
 import datetime
 import os
 import re
-import smtplib
 import sys
 import time
 import bs4 as bs4
 import requests
 import argparse
 import configparser
-from email.header import Header
 import logging
 
+# email sending
+import pickle
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from base64 import urlsafe_b64encode
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-def save_current_ads(filename, inzeraty):
+
+def save_current_ads(filename, ads):
     with open(filename, 'w', encoding='utf-8') as f:
-        for inzerat in inzeraty:
-            f.write('{0};{1};{2}\n'.format(inzerat[0], inzerat[1], inzerat[2]))
+        for ad in ads:
+            f.write('{0};{1};{2}\n'.format(ad[0], ad[1], ad[2]))
 
 
 def load_previous_ads_url(filename):
@@ -35,75 +42,80 @@ def load_previous_ads_url(filename):
     return urls
 
 
-def find_new_ads(previous_ads_url, ads):
+def find_new_ads(previous_ads_urls, ads):
     new_ads = []
     for ad in ads:
-        if ad[0] not in previous_ads_url:
+        if ad[0] not in previous_ads_urls:
             new_ads.append(ad)
 
     return new_ads
 
 
-def send_email(keyword, content, config, logging):
-    if len(content) == 0:
+def gmail_authenticate(config):
+    creds = None
+
+    if os.path.exists(config['EMAIL']['TOKEN_FILENAME']):
+        with open(config['EMAIL']['TOKEN_FILENAME'], 'rb') as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(config['EMAIL']['CREDENTIALS_FILENAME'], config['EMAIL']['GMAIL_API'])
+            creds = flow.run_local_server(port=0)
+        with open(config['EMAIL']['TOKEN_FILENAME'], 'wb') as token:
+            pickle.dump(creds, token)
+    return build('gmail', 'v1', credentials=creds)
+
+
+def send_email(keyword, new_ads, config, logging):
+    if len(new_ads) == 0:
         logging.info('No new ads found')
         return
 
-    logging.info('New ads found: {0}'.format(len(content)))
-    # Replace end sequence chars in subject
-    subject = 'Bazoš hlídač: {0}'.format(config[keyword]['TITLE'])
+    logging.info('New ads found: {0}'.format(len(new_ads)))
 
-    subject_header = Header(subject, 'utf-8').encode()
-    #for item in ["\n", "\r"]:
-    #    subject = subject.replace(item, ' ')
+    service = gmail_authenticate(config)
 
-    recipients = config[keyword]['RECIPIENTS'].split(' ')
+    message = MIMEMultipart()
+    message['to'] = ' ,'.join(config[keyword]['RECIPIENTS'].split(' '))
+    message['to'] = 'franta.hrdina@gmail.com'
+    message['from'] = config['EMAIL']['SENDER']
+    message['subject'] = 'Bazoš hlídač: {0}'.format(config[keyword]['TITLE'])
+    generated_body = generate_body(new_ads, keyword, message['subject'])
+    message.attach(MIMEText(generated_body, 'html'))
 
-    headers = {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Disposition': 'inline',
-        'Content-Transfer-Encoding': '8bit',
-        'From': 'bazos-hlidac@gmail.com',
-        'To': recipients,
-        'Date': datetime.datetime.now().strftime('%a, %d %b %Y  %H:%M:%S %Z'),
-        'X-Mailer': 'python',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64; rv:68.0) Gecko/20100101 Thunderbird/68.7.0',
-        'Subject': subject_header
-    }
-
-    # create the message
-    message = ''
-    for key, value in headers.items():
-        message += "%s: %s\n" % (key, value)
-
-    message += "\n"
-    message += '<h3>{0}</h3>\n'.format(subject)
-    timestamp = datetime.datetime.now().strftime('%d.%m.%Y %H:%M:%S')
-    message += '<h4>{0}</h4>\n'.format(timestamp)
-    message += "<h5>klíčová slova: {0}</h5>\n".format(config[keyword]['KEYWORDS'])
-    message += '<table>'
-
-    for line in content:
-        message += '\n<tr><td><a href="{0}">{1}</a></td><td align="right">{2}</td></tr>'.format(line[0], line[0].split('/')[-1], line[1])
-
-    message += '</table>'
-    # add contents
-    #message += "\n%s\n" % (content)
-
-    s = smtplib.SMTP(config['EMAIL']['SERVER'], config['EMAIL']['PORT'])
-
-    s.ehlo()
-    s.starttls()
-    s.ehlo()
-
-    s.login(config['EMAIL']['LOGIN'], config['EMAIL']['PASSWORD'])
+    encoded_body = {'raw': urlsafe_b64encode(message.as_bytes()).decode()}
 
     try:
-        logging.info('Sending {0} to {1}'.format(subject, headers['To']))
-        s.sendmail(headers['From'], headers['To'], message.encode("utf8"))
+        service.users().messages().send(
+            userId='me',
+            body=encoded_body
+        ).execute()
         logging.info("Sending email successful")
     except Exception as exp:
-        logging.error("Sending failed: {0}".format(exp.mes))
+        logging.error("Sending failed: {0}".format(repr(exp)))
+
+
+def generate_body(new_ads, keyword, subject):
+    body = ''
+
+    body += '<h3>{0}</h3>\n'.format(subject)
+    timestamp = datetime.datetime.now().strftime('%d.%m.%Y %H:%M:%S')
+    body += '<h4>{0}</h4>\n'.format(timestamp)
+    body += "<h5>klíčová slova: {0}</h5>\n".format(config[keyword]['KEYWORDS'])
+    body += '<table style="border-collapse: collapse;">'
+
+    for line in new_ads:
+        body += '\n<tr style="border-style: solid;border-width: 1px;border-color: gray;">' \
+                   '<td style="vertical-align: middle;"><a href="{0}">{1}</a></td>' \
+                   '<td nowrap align="right" style="vertical-align: middle;">{2}</td></tr>'.\
+            format(line[0], line[0].split('/')[-1], line[1].replace(' ', '&nbsp;'))
+
+    body += '</table>'
+
+    return body
 
 
 def load_ads(keyword, config):
@@ -117,7 +129,6 @@ def load_ads(keyword, config):
     
     global_search = True if config[keyword]['URL'] == 'https://www.bazos.cz/' else False
 
-    #return
     if global_search:
         url_string = config[keyword]['URL'] + 'search.php' + params
     else:
@@ -154,10 +165,10 @@ def load_ads(keyword, config):
             else:
                 ad_url = config[keyword]['ADS_URL'] + ad.find('h2', class_='nadpis').find('a')['href']
 
-            datum_text = ad.find('span', class_='velikost10').text
-            text_re = re.compile(r".*(\[.*\]).*")
-            text = text_re.search(datum_text).group(1).replace(' ', '').strip()
-            date_time = datetime.datetime.strptime(text.replace('[', '').replace(']', ''), '%d.%m.%Y')
+            date_span = ad.find('span', class_='velikost10').text
+            date_regex = re.compile(r".*(\[.*\]).*")
+            date_string = date_regex.search(date_span).group(1).replace(' ', '').strip()
+            date_time = datetime.datetime.strptime(date_string.replace('[', '').replace(']', ''), '%d.%m.%Y')
             if now - date_time >= datetime.timedelta(days=2):
                 break
             ads.append((ad_url, prize, date_time))
@@ -195,4 +206,3 @@ if __name__ == '__main__':
     send_email(args.option, new_ads, config, logging)
 
     logging.info('Bazoš ended')
-
